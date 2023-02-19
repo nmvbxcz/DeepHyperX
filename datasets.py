@@ -362,7 +362,7 @@ class HyperX(torch.utils.data.Dataset):
                 if x > p and x < data.shape[0] - p and y > p and y < data.shape[1] - p
             ]
         )
-        self.labels = [self.label[x, y] for x, y in self.indices]
+        self.labels = [self.label[x, y]-1 for x, y in self.indices]
         np.random.shuffle(self.indices)
 
     @staticmethod
@@ -415,7 +415,7 @@ class HyperX(torch.utils.data.Dataset):
 
         # Copy the data into numpy arrays (PyTorch doesn't like numpy views)
         data = np.asarray(np.copy(data).transpose((2, 0, 1)), dtype="float32")
-        label = np.asarray(np.copy(label), dtype="int64")
+        label = np.asarray(np.copy(label), dtype="int64") - 1
 
         # Load the data into PyTorch tensors
         data = torch.from_numpy(data)
