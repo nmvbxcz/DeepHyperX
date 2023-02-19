@@ -430,7 +430,7 @@ for run in range(N_RUNS):
     run_results = metrics(
         prediction,
         test_gt,
-        # ignored_labels=hyperparams["ignored_labels"],
+        ignored_labels=hyperparams["ignored_labels"],
         n_classes=N_CLASSES,
     )
 
