@@ -34,7 +34,7 @@ def get_model(name, **kwargs):
     n_classes = kwargs["n_classes"]
     n_bands = kwargs["n_bands"]
     weights = torch.ones(n_classes)
-    weights[torch.LongTensor(kwargs["ignored_labels"])] = 0.0
+    # weights[torch.LongTensor(kwargs["ignored_labels"])] = 0.0
     weights = weights.to(device)
     weights = kwargs.setdefault("weights", weights)
 
@@ -1222,9 +1222,9 @@ def val(net, data_loader, device="cpu", supervision="full"):
                 output, rec = outs
             _, output = torch.max(output, dim=1)
             for out, pred in zip(output.view(-1), target.view(-1)):
-                if out.item() in ignored_labels:
-                    continue
-                else:
-                    accuracy += out.item() == pred.item()
-                    total += 1
+                # if out.item() in ignored_labels:
+                #     continue
+                # else:
+                accuracy += out.item() == pred.item()
+                total += 1
     return accuracy / total
