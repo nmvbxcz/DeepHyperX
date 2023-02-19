@@ -240,7 +240,7 @@ hyperparams = vars(args)
 # Load the dataset
 img, gt, LABEL_VALUES, IGNORED_LABELS, RGB_BANDS, palette = get_dataset(DATASET, FOLDER)
 # Number of classes
-N_CLASSES = len(LABEL_VALUES)
+N_CLASSES = len(LABEL_VALUES) - len(IGNORED_LABELS)
 # Number of bands (last dimension of the image tensor)
 N_BANDS = img.shape[-1]
 
@@ -317,6 +317,9 @@ for run in range(N_RUNS):
 
     display_predictions(convert_to_color(train_gt), viz, caption="Train ground truth")
     display_predictions(convert_to_color(test_gt), viz, caption="Test ground truth")
+
+    # train_gt -= 1
+    # test_gt -=1
 
     if MODEL == "SVM_grid":
         print("Running a grid search SVM")
@@ -421,10 +424,13 @@ for run in range(N_RUNS):
         probabilities = test(model, img, hyperparams)
         prediction = np.argmax(probabilities, axis=-1)
 
+    prediction += 1
+    prediction[gt==0] = 0
+
     run_results = metrics(
         prediction,
         test_gt,
-        ignored_labels=hyperparams["ignored_labels"],
+        # ignored_labels=hyperparams["ignored_labels"],
         n_classes=N_CLASSES,
     )
 
@@ -442,7 +448,7 @@ for run in range(N_RUNS):
     )
 
     results.append(run_results)
-    show_results(run_results, viz, label_values=LABEL_VALUES)
+    show_results(run_results, viz, label_values=LABEL_VALUES[len(IGNORED_LABELS):])
 
 if N_RUNS > 1:
-    show_results(results, viz, label_values=LABEL_VALUES, agregated=True)
+    show_results(results, viz, label_values=LABEL_VALUES[len(IGNORED_LABELS):], agregated=True)
