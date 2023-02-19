@@ -348,12 +348,14 @@ def metrics(prediction, target, ignored_labels=[], n_classes=None):
 
     results = {}
 
-    n_classes = np.max(target) + 1 if n_classes is None else n_classes
+    n_classes = np.max(target) if n_classes is None else n_classes
 
     cm = confusion_matrix(
         target,
-        prediction,
-        labels=range(n_classes))
+        prediction
+        # ,
+        # labels=range(n_classes)
+    )
 
     results["Confusion matrix"] = cm
 
