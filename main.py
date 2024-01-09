@@ -18,7 +18,7 @@ from __future__ import division
 import torch
 import torch.utils.data as data
 from torchsummary import summary
-
+import matplotlib.pyplot as plt
 # Numpy, scipy, scikit-image, spectral
 import numpy as np
 import sklearn.svm
@@ -81,6 +81,14 @@ parser.add_argument(
     "mou (1D RNN)",
 )
 parser.add_argument(
+    "--data_type",
+    type=str,
+    default="no_padding",
+    help="Model to data padding:\n"
+    "no_padding, "
+    "padding_edge, "
+)
+parser.add_argument(
     "--folder",
     type=str,
     help="Folder where to store the "
@@ -129,6 +137,20 @@ group_dataset.add_argument(
     help="Path to the test set (optional, by default "
     "the test_set is the entire ground truth minus the training)",
 )
+group_dataset.add_argument(
+    "--normalization",
+    type=str,
+    default='MNI',
+    help="Normalization method to use for image preprocessing. Available:\n"
+    "None : Applying none preprocessing."
+    "L2NS (L2Normalize for each Sample): Normalizing with a unit Euclidean norm along each sample."
+    "MNB (MinMaxNormalize for each Band): Converting the dynamics to [0, 1] along each band."
+    "SNB (StandardNormalize for each Band): Normalizing first- and second-order moments along each band."
+    "MNI (MinMaxNormalize for total Image): Converting the dynamics to [0, 1] along the whole image."
+    "SNI (StandardNormalize for total Image): Normalizing first- and second-order moments along the whole image.",
+)
+
+
 # Training options
 group_train = parser.add_argument_group("Training")
 group_train.add_argument(
@@ -200,6 +222,7 @@ RADIATION_AUGMENTATION = args.radiation_augmentation
 MIXTURE_AUGMENTATION = args.mixture_augmentation
 # Dataset name
 DATASET = args.dataset
+DATATYPE = args.data_type
 # Model name
 MODEL = args.model
 # Number of runs (for cross-validation)
@@ -214,6 +237,8 @@ FOLDER = args.folder
 EPOCH = args.epoch
 # Sampling mode, e.g random sampling
 SAMPLING_MODE = args.sampling_mode
+# Normalization method
+NORM_METHOD = args.normalization
 # Pre-computed weights to restore
 CHECKPOINT = args.restore
 # Learning rate for the SGD
@@ -238,9 +263,9 @@ if not viz.check_connection:
 
 hyperparams = vars(args)
 # Load the dataset
-img, gt, LABEL_VALUES, IGNORED_LABELS, RGB_BANDS, palette = get_dataset(DATASET, FOLDER)
+img, gt, LABEL_VALUES, IGNORED_LABELS, RGB_BANDS, palette = get_dataset(DATASET, NORM_METHOD, FOLDER)
 # Number of classes
-N_CLASSES = len(LABEL_VALUES)
+N_CLASSES = len(LABEL_VALUES) - len(IGNORED_LABELS)
 # Number of bands (last dimension of the image tensor)
 N_BANDS = img.shape[-1]
 
@@ -274,6 +299,7 @@ hyperparams.update(
         "n_bands": N_BANDS,
         "ignored_labels": IGNORED_LABELS,
         "device": CUDA_DEVICE,
+        "data_type": DATATYPE
     }
 )
 hyperparams = dict((k, v) for k, v in hyperparams.items() if v is not None)
@@ -305,6 +331,7 @@ for run in range(N_RUNS):
     else:
         # Sample random training spectra
         train_gt, test_gt = sample_gt(gt, SAMPLE_PERCENTAGE, mode=SAMPLING_MODE)
+        # train_ind, test_ind, train_gt, test_gt = chooseRSdata(dataSetName=DATASET, train_ratio=SAMPLE_PERCENTAGE, normType=1, trainId=run)
     print(
         "{} samples selected (over {})".format(
             np.count_nonzero(train_gt), np.count_nonzero(gt)
@@ -317,6 +344,9 @@ for run in range(N_RUNS):
 
     display_predictions(convert_to_color(train_gt), viz, caption="Train ground truth")
     display_predictions(convert_to_color(test_gt), viz, caption="Test ground truth")
+
+    # train_gt -= 1
+    # test_gt -=1
 
     if MODEL == "SVM_grid":
         print("Running a grid search SVM")
@@ -373,7 +403,8 @@ for run in range(N_RUNS):
         # Neural network
         model, optimizer, loss, hyperparams = get_model(MODEL, **hyperparams)
         # Split train set in train/val
-        train_gt, val_gt = sample_gt(train_gt, 0.95, mode="random")
+        # train_gt, val_gt = sample_gt(train_gt, 0.9, mode="random")
+        val_gt = train_gt
         # Generate the dataset
         train_dataset = HyperX(img, train_gt, **hyperparams)
         train_loader = data.DataLoader(
@@ -421,6 +452,9 @@ for run in range(N_RUNS):
         probabilities = test(model, img, hyperparams)
         prediction = np.argmax(probabilities, axis=-1)
 
+    prediction += 1
+    prediction[gt==0] = 0
+
     run_results = metrics(
         prediction,
         test_gt,
@@ -442,7 +476,7 @@ for run in range(N_RUNS):
     )
 
     results.append(run_results)
-    show_results(run_results, viz, label_values=LABEL_VALUES)
+    show_results(run_results, viz, label_values=LABEL_VALUES[len(IGNORED_LABELS):])
 
 if N_RUNS > 1:
-    show_results(results, viz, label_values=LABEL_VALUES, agregated=True)
+    show_results(results, viz, label_values=LABEL_VALUES[len(IGNORED_LABELS):], agregated=True)

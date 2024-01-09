@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.metrics import confusion_matrix
 import sklearn.model_selection
 import seaborn as sns
+from sklearn.preprocessing import normalize, MinMaxScaler, StandardScaler
 import itertools
 import spectral
 import visdom
@@ -221,8 +222,36 @@ def get_random_pos(img, window_shape):
     y2 = y1 + h
     return x1, x2, y1, y2
 
+def normalise_image(image, method='None'):
+    allowed_methods = ['NONE', 'L2NS', 'MNB', 'SNB', 'MNI', 'SNI']
+    method = method.upper()
+    if method not in allowed_methods:
+        raise ValueError('unknown normalization method "%s"' % (method,))
 
-def padding_image(image, patch_size=None, mode="symmetric", constant_values=0):
+    shp = image.shape
+    if len(shp) >= 3:
+        image = image.reshape(-1, shp[-1])
+
+    if method == 'L2NS':
+        scale = normalize(image, norm='l2', axis=1)
+        image = image / scale[:, np.newaxis]
+    elif method == 'MNB':
+        scaler = MinMaxScaler()
+        image = scaler.fit_transform(image)
+    elif method == 'SNB':
+        scaler = StandardScaler()
+        image = scaler.fit_transform(image)
+    elif method == 'MNI':
+        scaler = MinMaxScaler()
+        image = scaler.fit_transform(image.reshape(-1, shp[-1])).reshape(shp)
+    elif method == 'SNI':
+        scaler = StandardScaler()
+        image = scaler.fit_transform(image.reshape(-1, shp[-1])).reshape(shp)
+
+    return np.reshape(image, shp)
+
+
+def padding_image(image, patch_size=None, mode="symmetric", **kwargs):
     """Padding an input image.
     Modified at 2020.11.16. If you find any issues, please email at mengxue_zhang@hhu.edu.cn with details.
 
@@ -245,7 +274,8 @@ def padding_image(image, patch_size=None, mode="symmetric", constant_values=0):
     w = patch_size[1] // 2
     pad_width = [[h, h], [w, w]]
     [pad_width.append([0, 0]) for i in image.shape[2:]]
-    padded_image = np.pad(image, pad_width, mode=mode, constant_values=constant_values)
+    # padded_image = np.pad(image, pad_width, mode=mode, constant_values=constant_values)
+    padded_image = np.pad(image, pad_width, mode=mode, **kwargs)
     return padded_image
 
 
@@ -348,12 +378,14 @@ def metrics(prediction, target, ignored_labels=[], n_classes=None):
 
     results = {}
 
-    n_classes = np.max(target) + 1 if n_classes is None else n_classes
+    n_classes = np.max(target) if n_classes is None else n_classes
 
     cm = confusion_matrix(
         target,
-        prediction,
-        labels=range(n_classes))
+        prediction
+        # ,
+        # labels=range(n_classes)
+    )
 
     results["Confusion matrix"] = cm
 

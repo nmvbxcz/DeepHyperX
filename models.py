@@ -34,7 +34,7 @@ def get_model(name, **kwargs):
     n_classes = kwargs["n_classes"]
     n_bands = kwargs["n_bands"]
     weights = torch.ones(n_classes)
-    weights[torch.LongTensor(kwargs["ignored_labels"])] = 0.0
+    # weights[torch.LongTensor(kwargs["ignored_labels"])] = 0.0
     weights = weights.to(device)
     weights = kwargs.setdefault("weights", weights)
 
@@ -47,6 +47,24 @@ def get_model(name, **kwargs):
         criterion = nn.CrossEntropyLoss(weight=kwargs["weights"])
         kwargs.setdefault("epoch", 100)
         kwargs.setdefault("batch_size", 100)
+    elif name == "swnet":
+        patch_size = kwargs.setdefault("patch_size", 25)
+        center_pixel = True
+        model = SW_Net(1, n_classes, filter_raidus=3, patch_size=patch_size)
+        # model = sw_conv_net(200, n_classes, filter_raidus=4, patch_size=patch_size)
+        lr = kwargs.setdefault("learning_rate", 0.01)
+        optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=0.0005)
+        kwargs.setdefault("batch_size", 64)
+        criterion = nn.CrossEntropyLoss(weight=kwargs["weights"])
+    elif name == "swnetnew":
+        patch_size = kwargs.setdefault("patch_size", 25)
+        center_pixel = True
+        model = sw_conv_net(n_bands, n_classes, filter_radius=4, patch_size=patch_size)
+        # model = sw_new_Net(n_bands, n_classes, filter_raidus=4, patch_size=patch_size)
+        lr = kwargs.setdefault("learning_rate", 0.01)
+        optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=0.0005)
+        kwargs.setdefault("batch_size", 64)
+        criterion = nn.CrossEntropyLoss(weight=kwargs["weights"])
     elif name == "hamida":
         patch_size = kwargs.setdefault("patch_size", 5)
         center_pixel = True
@@ -238,6 +256,388 @@ class Baseline(nn.Module):
             x = self.dropout(x)
         x = self.fc4(x)
         return x
+
+
+# class CustomConv2d(nn.Module):
+#     def __init__(self, in_channels, out_channels, kernel_size, padding, stride, mask_type, rot_times):
+#         super(CustomConv2d, self).__init__()
+#
+#         self.in_channels = in_channels
+#         self.out_channels = out_channels
+#         self.kernel_size = kernel_size
+#         self.padding = padding
+#         self.stride = stride
+#         self.mask_type = mask_type
+#         self.rot_times = rot_times
+#
+#         # 定义卷积层需要学习的参数，包括卷积核权重和偏置
+#         self.weight = nn.Parameter(torch.randn(out_channels, in_channels, 1, kernel_size, kernel_size))
+#         self.bias = nn.Parameter(torch.zeros(out_channels))
+#         self.register_buffer('weight_mask', torch.zeros_like(self.weight.data))
+#         # self.register_buffer('bias_mask', torch.zeros_like(self.bias.data))
+#         _, _, _, h, w = self.weight.size()
+#         if self.mask_type == 'Q':
+#             self.weight_mask[:, :, 0: h // 2 + 1, 0: w // 2 + 1] = 1
+#         elif self.mask_type == 'H':
+#             self.weight_mask[:, :, :, 0: w // 2 + 1] = 1
+#         else:
+#             print('error mask type')
+#             exit(-1)
+#
+#         # # 将卷积核的一部分置为0
+#         # self.weight[:, :, 1:2, 1:2] = 0.0
+#
+#     def forward(self, x):
+#         # 手动实现卷积操作
+#         out = nn.functional.conv3d(x, self.weight*self.weight_mask, self.bias, stride=(self.stride, self.stride, 1), padding=self.padding)
+#         return out
+
+
+# class sw_Conv(nn.Module):
+#     def __init__(self, in_channels, out_channels, kernel_size, bias=True):
+#         super().__init__()
+#
+#         # 定义非规格形状的卷积核
+#         self.weight = nn.Parameter(torch.randn(out_channels, in_channels, *kernel_size).float())
+#         self.bias = nn.Parameter(torch.randn(out_channels).float()) if bias else None
+#
+#     def forward(self, x):
+#         return nn.functional.conv2d(x, self.weight, self.bias, padding=tuple(k // 2 for k in self.weight.shape[2:]))
+
+class sw_block(nn.Module):
+    def __init__(self, in_channels, out_channels, filter_radius, patch_size,temperature=100, dropout=False):
+        super(sw_block, self).__init__()
+        self.filter_radius = filter_radius
+        self.patch_size = patch_size
+        self.temperature = temperature
+        self.out_channels = out_channels
+        assert in_channels == 1
+
+        # 创建共享的参数
+        # self.shared_Q_weight = nn.Parameter(torch.randn(out_channels, in_channels, (1, filter_radius+1, filter_radius+1)).float())
+        # self.shared_H_weight = nn.Parameter(torch.randn(out_channels, in_channels, (1, filter_radius+1, filter_radius*2+1)).float())
+        # self.shared_Q_bias = nn.Parameter(torch.randn(out_channels).float()) if bias else None
+        # self.shared_H_bias = nn.Parameter(torch.randn(out_channels).float()) if bias else None
+        # self.register_buffer('mask', torch.zeros_like(self.weight.data))
+
+        self.softmax = nn.Softmax(dim=1)
+
+        # 使用共享的权重创建两个网络层
+        self.conv1 = nn.Conv3d(in_channels, out_channels, (1, filter_radius+1, filter_radius+1), padding=(0,filter_radius,filter_radius))
+        self.conv2 = nn.Conv3d(in_channels, out_channels, (1, filter_radius+1, filter_radius*2+1), padding=(0,filter_radius,filter_radius))
+
+        self.bn1 = nn.BatchNorm3d(out_channels)
+        self.bn2 = nn.BatchNorm3d(out_channels)
+
+        # init.normal_(self.conv1.weight, mean=1.0/((filter_radius+1)*(filter_radius+1)), std=1.0/((filter_radius+1)*(filter_radius+1)))
+        # init.normal_(self.conv1.weight, mean=1.0/((filter_radius+1)*(2*filter_radius+1)), std=1.0/((filter_radius+1)*(2*filter_radius+1)))
+
+    def forward(self, x):
+        # 将共享的参数传递给网络层
+        x1 = F.relu(self.bn1(self.conv1(x.rot90(0,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :-self.filter_radius] - x.repeat(1,self.out_channels,1,1,1)))   # patch_size - 2*filter_raidus
+        x2 = F.relu(self.bn1(self.conv1(x.rot90(1,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :-self.filter_radius].rot90(-1,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x3 = F.relu(self.bn1(self.conv1(x.rot90(2,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :-self.filter_radius].rot90(-2,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x4 = F.relu(self.bn1(self.conv1(x.rot90(3,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :-self.filter_radius].rot90(-3,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x5 = F.relu(self.bn2(self.conv2(x.rot90(0,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :] - x.repeat(1,self.out_channels,1,1,1)))
+        x6 = F.relu(self.bn2(self.conv2(x.rot90(1,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :].rot90(-1,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x7 = F.relu(self.bn2(self.conv2(x.rot90(2,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :].rot90(-2,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x8 = F.relu(self.bn2(self.conv2(x.rot90(3,dims=[-2,-1]))[:, :, :, :-self.filter_radius, :].rot90(-3,dims=[-2,-1]) - x.repeat(1,self.out_channels,1,1,1)))
+        x9 = torch.stack([x1, x2, x3, x4, x5, x6, x7, x8], dim=1)
+        x_attention = self.softmax(-torch.abs(x9)*self.temperature)
+        out = x + torch.sum(x9 * x_attention, dim=1, keepdim=False)
+        return out
+
+
+class MaskedConv3d(nn.Conv3d):
+    def __init__(self, mask_type, rot_time, *args, **kwargs):
+        kwargs['kernel_size'] = (1, kwargs['kernel_size'], kwargs['kernel_size'])
+        kwargs['padding'] = (0, kwargs['padding'], kwargs['padding'])
+        super(MaskedConv3d, self).__init__(*args, **kwargs)
+        assert mask_type in ['Q', 'H'], "Invalid mask type, choose from ['A', 'B']"
+        self.mask_type = mask_type
+        _, _, _, h, w = self.weight.size()
+        self.register_buffer('mask', torch.zeros_like(self.weight.data))
+        assert h == w
+        if self.mask_type == 'Q':
+            self.mask[:, :, 0: h // 2 + 1, 0: w // 2 + 1] = 1
+        elif self.mask_type == 'H':
+            self.mask[:, :, :, 0: w // 2 + 1] = 1
+        else:
+            print('error mask type')
+            exit(-1)
+        self.mask.rot90(rot_time)
+
+    def forward(self, x):
+        self.weight.data *= self.mask
+        return super(MaskedConv3d, self).forward(x)
+
+
+class SW_Net(nn.Module):
+    """
+    Baseline network
+    """
+
+    @staticmethod
+    def weight_init(m):
+        # [All the trainable parameters in our CNN should be initialized to
+        # be a random value between −0.05 and 0.05.]
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+            init.uniform_(m.weight, -0.05, 0.05)
+            init.zeros_(m.bias)
+
+    def _get_final_flattened_size(self):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, self.input_channels)
+            x = self.pool(self.conv(x))
+        return x.numel()
+
+    def __init__(self, input_channels, n_classes, filter_raidus, patch_size, dropout=False):
+        super(SW_Net, self).__init__()
+        self.use_dropout = dropout
+        if dropout:
+            self.dropout = nn.Dropout(p=0.5)
+
+        self.n_classes = n_classes
+        output_channels = 1
+
+        # self.sw_conv1 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='Q', rot_times=0)
+        # self.sw_conv2 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='Q', rot_times=1)
+        # self.sw_conv3 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='Q', rot_times=2)
+        # self.sw_conv4 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='Q', rot_times=3)
+        # self.sw_conv5 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='H', rot_times=0)
+        # self.sw_conv6 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='H', rot_times=1)
+        # self.sw_conv7 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='H', rot_times=2)
+        # self.sw_conv8 = CustomConv2d(in_channels=input_channels, out_channels=output_channels,
+        #                              kernel_size=2 * filter_raidus + 1, padding=0, stride=1, mask_type='H', rot_times=3)
+
+        self.sw_conv1 = MaskedConv3d(mask_type='Q', rot_time=0, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv2 = MaskedConv3d(mask_type='Q', rot_time=1, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv3 = MaskedConv3d(mask_type='Q', rot_time=2, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv4 = MaskedConv3d(mask_type='Q', rot_time=3, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv5 = MaskedConv3d(mask_type='H', rot_time=0, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv6 = MaskedConv3d(mask_type='H', rot_time=1, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv7 = MaskedConv3d(mask_type='H', rot_time=2, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+        self.sw_conv8 = MaskedConv3d(mask_type='H', rot_time=3, in_channels=input_channels, out_channels=output_channels,
+                                     groups=input_channels, kernel_size=2 * filter_raidus + 1, padding=filter_raidus)
+
+        self.conv1 = nn.Conv3d(1, 32, (103, 1, 1))
+        self.conv2 = nn.Conv3d(32, 48, (1, 5, 5), (1, 1, 1))
+        self.conv3 = nn.Conv3d(48, 64, (1, 4, 4))
+        self.conv4 = nn.Conv3d(64, n_classes, (1, 1, 1))
+
+        self.pool1 = nn.MaxPool3d(kernel_size=(1,2,2),stride=(1,1,1))
+        self.pool2 = nn.MaxPool3d(kernel_size=(1,2,2),stride=(1,2,2))
+        self.pool3 = nn.MaxPool3d(kernel_size=(1,2,2),stride=(1,2,2))
+
+        self.bn1 = nn.BatchNorm3d(32)
+        self.bn2 = nn.BatchNorm3d(48)
+        self.bn3 = nn.BatchNorm3d(64)
+
+        self.nn = nn.Linear(48*4*4,n_classes)
+
+        self.sf = nn.Softmax(dim=1)
+
+        self.apply(self.weight_init)
+
+    def forward(self, x):
+        x1 = self.sw_conv1(x)
+        x2 = self.sw_conv2(x)
+        x3 = self.sw_conv3(x)
+        x4 = self.sw_conv4(x)
+        x5 = self.sw_conv5(x)
+        x6 = self.sw_conv6(x)
+        x7 = self.sw_conv7(x)
+        x8 = self.sw_conv8(x)
+        # x9 = torch.concat((x1,x2,x3,x4,x5,x6,x7,x8), dim=)
+        x9 = x + nn.functional.relu(x1 - x) * x1 + nn.functional.relu(x2 - x) * x2 + \
+             nn.functional.relu(x3 - x) * x3 + nn.functional.relu(x4 - x) * x4 + \
+             nn.functional.relu(x5 - x) * x5 + nn.functional.relu(x6 - x) * x6 + \
+             nn.functional.relu(x7 - x) * x7 + nn.functional.relu(x8 - x) * x8
+
+        # x9 = F.relu(x9)
+        x9 = self.conv1(x)
+        x9 = self.bn1(x9)
+        x9 = F.relu(x9)
+
+        x9 = self.pool1(x9)
+        x9 = self.pool2(x9)
+
+        x9 = self.conv2(x9)
+        x9 = self.bn2(x9)
+        x9 = F.relu(x9)
+
+        x9 = self.pool3(x9)
+
+        x9 = self.conv3(x9)
+        x9 = self.bn3(x9)
+        x9 = F.relu(x9)
+
+        x9 = self.conv4(x9)
+        x9 = self.sf(x9)
+        # x9 = F.relu(x9)
+
+        # x9 = x9.view(-1,9)
+        # x9 = self.nn(x9)
+
+        # x9 = self.conv3(x9)
+        # x9 = F.relu(x9)
+        # x9 = self.conv4(x9)
+        # x9 = self.sf(x9)
+        # x9 = x9.view(-1, self.n_classes)
+        return x9
+        # return x2
+
+        # if self.use_dropout:
+        #     x = self.dropout(x)
+        # x = F.relu(self.fc2(x))
+        # if self.use_dropout:
+        #     x = self.dropout(x)
+        # x = F.relu(self.fc3(x))
+        # if self.use_dropout:
+        #     x = self.dropout(x)
+        # x = self.fc4(x)
+        # return x
+
+class sw_conv2D(nn.Module):
+    def __init__(self, in_channels, out_channels, filter_radius, dropout=False):
+        super(sw_conv2D, self).__init__()
+        # assert in_channels == band_size
+        self.filter_radius = filter_radius
+        self.convQ = nn.Conv2d(in_channels, in_channels, (filter_radius+1, filter_radius+1), padding=(filter_radius,filter_radius))
+        self.convH = nn.Conv2d(in_channels, in_channels, (filter_radius+1, filter_radius*2+1), padding=(filter_radius,filter_radius))
+        self.conv = nn.Conv2d(in_channels, out_channels, (1, 1))
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.bn2 = nn.BatchNorm2d(in_channels)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+
+
+    def forward(self, x):
+        # 将共享的参数传递给网络层
+        x1 = F.relu(self.bn1(self.convQ(x)[:, :, :-self.filter_radius, :-self.filter_radius]))   # patch_size - 2*filter_raidus
+        x2 = F.relu(self.bn1(self.convQ(x.rot90(1,dims=[-2,-1]))[:, :, :-self.filter_radius, :-self.filter_radius].rot90(-1,dims=[-2,-1])))
+        x3 = F.relu(self.bn1(self.convQ(x.rot90(2,dims=[-2,-1]))[:, :, :-self.filter_radius, :-self.filter_radius].rot90(-2,dims=[-2,-1])))
+        x4 = F.relu(self.bn1(self.convQ(x.rot90(3,dims=[-2,-1]))[:, :, :-self.filter_radius, :-self.filter_radius].rot90(-3,dims=[-2,-1])))
+        x5 = F.relu(self.bn2(self.convH(x)[:, :, :, :-self.filter_radius, :]))
+        x6 = F.relu(self.bn2(self.convH(x.rot90(1,dims=[-2,-1]))[:, :, :-self.filter_radius, :].rot90(-1,dims=[-2,-1])))
+        x7 = F.relu(self.bn2(self.convH(x.rot90(2,dims=[-2,-1]))[:, :, :-self.filter_radius, :].rot90(-2,dims=[-2,-1])))
+        x8 = F.relu(self.bn2(self.convH(x.rot90(3,dims=[-2,-1]))[:, :, :-self.filter_radius, :].rot90(-3,dims=[-2,-1])))
+        x9 = torch.stack([x, x1, x2, x3, x4, x5, x6, x7, x8], dim=1)
+        out = F.relu(self.bn3(self.conv(x9)))
+        return out
+
+class sw_conv_net(nn.Module):
+    def __init__(self, n_bands, n_classes, filter_radius, patch_size, dropout=False):
+        super(sw_conv_net, self).__init__()
+        self.filter_radius = filter_radius
+        self.conv1 = sw_conv2D(n_bands, 100, filter_radius)
+        self.conv2 = sw_conv2D(100, 50, filter_radius)
+        self.conv3 = sw_conv2D(50, 32, n_bands, filter_radius)
+        self.line = nn.Linear(10,n_classes)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.line(x)
+        return x
+
+
+
+
+class sw_new_Net(nn.Module):
+    """
+    Baseline network
+    """
+
+    @staticmethod
+    def weight_init(m):
+        # [All the trainable parameters in our CNN should be initialized to
+        # be a random value between −0.05 and 0.05.]
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+            init.uniform_(m.weight, -0.05, 0.05)
+            init.zeros_(m.bias)
+
+    def _get_final_flattened_size(self):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, self.input_channels)
+            x = self.pool(self.conv(x))
+        return x.numel()
+
+    def __init__(self, n_bands, n_classes, filter_raidus, patch_size, dropout=False):
+        super(sw_new_Net, self).__init__()
+        self.use_dropout = dropout
+        if dropout:
+            self.dropout = nn.Dropout(p=0.5)
+        self.sw = sw_block(1, 1, filter_raidus, patch_size, 1000, dropout=False)
+        self.sw2 = sw_block(1, 1, filter_raidus, patch_size, dropout=False)
+        self.sw3 = sw_block(1, 1, filter_raidus, patch_size, dropout=False)
+
+        self.conv1 = nn.Conv3d(1, 32, (n_bands, 1, 1))
+        self.conv2 = nn.Conv3d(32, 48, (1, 5, 5))
+        self.conv3 = nn.Conv3d(48, 64, (1, 4, 4))
+        self.conv4 = nn.Conv3d(64, n_classes, (1, 1, 1))
+        # self.conv5 = nn.Conv3d(80, n_classes, (1, 1, 1))
+
+        self.pool1 = nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 1, 1))
+        self.pool2 = nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2))
+        self.pool3 = nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2))
+
+        self.bn1 = nn.BatchNorm3d(32)
+        self.bn2 = nn.BatchNorm3d(48)
+        self.bn3 = nn.BatchNorm3d(64)
+        self.bn4 = nn.BatchNorm3d(n_classes)
+
+        self.sf = nn.Softmax(dim=1)
+        self.nn = nn.Linear(80, n_classes)
+
+        self.apply(self.weight_init)
+
+    def forward(self, x):
+        x = self.sw(x)
+        # x = self.sw2(x)
+        # x = self.sw3(x)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        x = self.pool1(x)
+        x = self.pool2(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+
+        x = self.pool3(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+
+        x = self.conv4(x)
+        x = self.bn4(x)
+        # x = F.relu(x)
+
+        # x = self.conv5(x)
+        # x = x.view(-1, 80)
+        # x = self.nn(x)
+
+        return x
+
 
 
 class HuEtAl(nn.Module):
@@ -1053,10 +1453,12 @@ def train(
             optimizer.zero_grad()
             if supervision == "full":
                 output = net(data)
+                output = torch.squeeze(output)
                 loss = criterion(output, target)
             elif supervision == "semi":
                 outs = net(data)
                 output, rec = outs
+                output = torch.squeeze(output)
                 loss = criterion[0](output, target) + net.aux_loss_weight * criterion[
                     1
                 ](rec, data)
@@ -1163,6 +1565,11 @@ def test(net, img, hyperparams):
     center_pixel = hyperparams["center_pixel"]
     batch_size, device = hyperparams["batch_size"], hyperparams["device"]
     n_classes = hyperparams["n_classes"]
+    data_type = hyperparams["data_type"]
+
+    if data_type == "padding_reflect":
+        p = patch_size // 2
+        img = np.pad(img, ((p,p), (p,p), (0,0)), 'reflect')
 
     kwargs = {
         "step": hyperparams["test_stride"],
@@ -1199,11 +1606,14 @@ def test(net, img, hyperparams):
                 output = output.numpy()
             else:
                 output = np.transpose(output.numpy(), (0, 2, 3, 1))
+            output = np.squeeze(output)
             for (x, y, w, h), out in zip(indices, output):
                 if center_pixel:
                     probs[x + w // 2, y + h // 2] += out
                 else:
                     probs[x : x + w, y : y + h] += out
+    if data_type == "padding_reflect":
+        probs = probs[p:-p,p:-p,:]
     return probs
 
 
@@ -1222,9 +1632,9 @@ def val(net, data_loader, device="cpu", supervision="full"):
                 output, rec = outs
             _, output = torch.max(output, dim=1)
             for out, pred in zip(output.view(-1), target.view(-1)):
-                if out.item() in ignored_labels:
-                    continue
-                else:
-                    accuracy += out.item() == pred.item()
-                    total += 1
+                # if out.item() in ignored_labels:
+                #     continue
+                # else:
+                accuracy += out.item() == pred.item()
+                total += 1
     return accuracy / total

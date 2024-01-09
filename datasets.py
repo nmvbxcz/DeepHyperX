@@ -10,6 +10,7 @@ import torch.utils
 import torch.utils.data
 import os
 from tqdm import tqdm
+from urllib.request import urlretrieve
 
 try:
     # Python 3
@@ -18,7 +19,7 @@ except ImportError:
     # Python 2
     from urllib import urlretrieve
 
-from utils import open_file
+from utils import open_file, normalise_image
 
 DATASETS_CONFIG = {
     "PaviaC": {
@@ -96,10 +97,12 @@ class TqdmUpTo(tqdm):
         self.update(b * bsize - self.n)  # will also set self.n = b * bsize
 
 
-def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
+def get_dataset(dataset_name, normalization_method='MNI', target_folder="./", datasets=DATASETS_CONFIG):
     """Gets the dataset specified by name and return the related components.
     Args:
         dataset_name: string with the name of the dataset
+        normalization_method (optional): string option used to normalise a HSI,
+        defaults to MNI (MinMaxNormalize for total Image).
         target_folder (optional): folder to store the datasets, defaults to ./
         datasets (optional): dataset configuration dictionary, defaults to prebuilt one
     Returns:
@@ -110,12 +113,9 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
         rgb_bands: int tuple that correspond to red, green and blue bands
     """
     palette = None
-
     if dataset_name not in datasets.keys():
         raise ValueError("{} dataset is unknown.".format(dataset_name))
-
     dataset = datasets[dataset_name]
-
     folder = target_folder + datasets[dataset_name].get("folder", dataset_name + "/")
     if dataset.get("download", True):
         # Download the dataset if is not present
@@ -134,15 +134,11 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
                     urlretrieve(url, filename=folder + filename, reporthook=t.update_to)
     elif not os.path.isdir(folder):
         print("WARNING: {} is not downloadable.".format(dataset_name))
-
     if dataset_name == "PaviaC":
         # Load the image
         img = open_file(folder + "Pavia.mat")["pavia"]
-
         rgb_bands = (55, 41, 12)
-
         gt = open_file(folder + "Pavia_gt.mat")["pavia_gt"]
-
         label_values = [
             "Undefined",
             "Water",
@@ -155,17 +151,12 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Meadows",
             "Bare Soil",
         ]
-
         ignored_labels = [0]
-
     elif dataset_name == "PaviaU":
         # Load the image
         img = open_file(folder + "PaviaU.mat")["paviaU"]
-
         rgb_bands = (55, 41, 12)
-
         gt = open_file(folder + "PaviaU_gt.mat")["paviaU_gt"]
-
         label_values = [
             "Undefined",
             "Asphalt",
@@ -178,16 +169,11 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Self-Blocking Bricks",
             "Shadows",
         ]
-
         ignored_labels = [0]
-
     elif dataset_name == "Salinas":
         img = open_file(folder + "Salinas_corrected.mat")["salinas_corrected"]
-
         rgb_bands = (43, 21, 11)  # AVIRIS sensor
-
         gt = open_file(folder + "Salinas_gt.mat")["salinas_gt"]
-
         label_values = [
             "Undefined",
             "Brocoli_green_weeds_1",
@@ -207,16 +193,12 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Vinyard_untrained",
             "Vinyard_vertical_trellis",
         ]
-
         ignored_labels = [0]
-
     elif dataset_name == "IndianPines":
         # Load the image
         img = open_file(folder + "Indian_pines_corrected.mat")
         img = img["indian_pines_corrected"]
-
         rgb_bands = (43, 21, 11)  # AVIRIS sensor
-
         gt = open_file(folder + "Indian_pines_gt.mat")["indian_pines_gt"]
         label_values = [
             "Undefined",
@@ -237,15 +219,11 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Buildings-Grass-Trees-Drives",
             "Stone-Steel-Towers",
         ]
-
         ignored_labels = [0]
-
     elif dataset_name == "Botswana":
         # Load the image
         img = open_file(folder + "Botswana.mat")["Botswana"]
-
         rgb_bands = (75, 33, 15)
-
         gt = open_file(folder + "Botswana_gt.mat")["Botswana_gt"]
         label_values = [
             "Undefined",
@@ -264,15 +242,11 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Mixed mopane",
             "Exposed soils",
         ]
-
         ignored_labels = [0]
-
     elif dataset_name == "KSC":
         # Load the image
         img = open_file(folder + "KSC.mat")["KSC"]
-
         rgb_bands = (43, 21, 11)  # AVIRIS sensor
-
         gt = open_file(folder + "KSC_gt.mat")["KSC_gt"]
         label_values = [
             "Undefined",
@@ -290,7 +264,6 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             "Mud flats",
             "Wate",
         ]
-
         ignored_labels = [0]
     else:
         # Custom dataset
@@ -302,7 +275,6 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
             label_values,
             palette,
         ) = CUSTOM_DATASETS_CONFIG[dataset_name]["loader"](folder)
-
     # Filter NaN out
     nan_mask = np.isnan(img.sum(axis=-1))
     if np.count_nonzero(nan_mask) > 0:
@@ -312,11 +284,11 @@ def get_dataset(dataset_name, target_folder="./", datasets=DATASETS_CONFIG):
     img[nan_mask] = 0
     gt[nan_mask] = 0
     ignored_labels.append(0)
-
     ignored_labels = list(set(ignored_labels))
     # Normalization
     img = np.asarray(img, dtype="float32")
     img = (img - np.min(img)) / (np.max(img) - np.min(img))
+    img = normalise_image(img, method=normalization_method)
     return img, gt, label_values, ignored_labels, rgb_bands, palette
 
 
@@ -344,25 +316,36 @@ class HyperX(torch.utils.data.Dataset):
         self.radiation_augmentation = hyperparams["radiation_augmentation"]
         self.mixture_augmentation = hyperparams["mixture_augmentation"]
         self.center_pixel = hyperparams["center_pixel"]
+        self.data_type = hyperparams["data_type"]
         supervision = hyperparams["supervision"]
+
+        p = self.patch_size // 2
+
+        if self.data_type == "padding_edge":
+            self.data = np.pad(self.data, ((p, p), (p, p), (0, 0)), 'edge')
+            self.label = np.pad(self.label, ((p, p), (p, p)), mode='constant', constant_values=0)
+
         # Fully supervised : use all pixels with label not ignored
         if supervision == "full":
-            mask = np.ones_like(gt)
+            mask = np.ones_like(self.label)
             for l in self.ignored_labels:
-                mask[gt == l] = 0
+                mask[self.label == l] = 0
         # Semi-supervised : use all pixels, except padding
         elif supervision == "semi":
-            mask = np.ones_like(gt)
+            mask = np.ones_like(self.label)
         x_pos, y_pos = np.nonzero(mask)
-        p = self.patch_size // 2
-        self.indices = np.array(
-            [
-                (x, y)
-                for x, y in zip(x_pos, y_pos)
-                if x > p and x < data.shape[0] - p and y > p and y < data.shape[1] - p
-            ]
-        )
-        self.labels = [self.label[x, y] for x, y in self.indices]
+
+        if self.data_type == "padding_edge":
+            self.indices = np.array([(x, y) for x, y in zip(x_pos, y_pos)])
+        elif self.data_type == "no_padding":
+            self.indices = np.array(
+                [
+                    (x, y)
+                    for x, y in zip(x_pos, y_pos)
+                    if x > p and x < data.shape[0] - p and y > p and y < data.shape[1] - p
+                ]
+            )
+        self.labels = [self.label[x, y]-1 for x, y in self.indices]
         np.random.shuffle(self.indices)
 
     @staticmethod
@@ -403,7 +386,7 @@ class HyperX(torch.utils.data.Dataset):
         x2, y2 = x1 + self.patch_size, y1 + self.patch_size
 
         data = self.data[x1:x2, y1:y2]
-        label = self.label[x1:x2, y1:y2]
+        label = self.label[x1:x2, y1:y2] - 1
 
         if self.flip_augmentation and self.patch_size > 1:
             # Perform data augmentation (only on 2D patches)
